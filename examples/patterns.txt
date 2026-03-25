@@ -1,0 +1,10 @@
+# One wildcard
+*.com
+*word.com
+word*.com
+
+# Multi-wildcard
+*dog*.com
+*joe**.com
+*joe**hey.com
+Etc.

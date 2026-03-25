@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Domain Search</title>
+    <link rel="stylesheet" href="/static/style.css?v=2026-03-23-1" />
+  </head>
+  <body>
+    <div class="backdrop"></div>
+    <main class="page">
+      <section class="hero">
+        <div class="hero-top">
+          <p class="kicker">RDAP-safe availability scanner</p>
+          <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Toggle dark mode">Dark Mode</button>
+        </div>
+        <h1>Find Untaken Wildcard Domains Fast</h1>
+        <p class="subtitle">
+          Use 1-4 wildcards (`*`). Wildcard #1 uses list order #1; wildcard positions 2-4 use list order #2 when present, otherwise list #1.
+        </p>
+      </section>
+
+      <section class="panel search-panel">
+        <form id="search-form">
+          <label for="pattern">Pattern (supports 1-4 wildcards, example: <code>*domain.com</code> or <code>*-*-*.com</code>)</label>
+          <input id="pattern" name="pattern" type="text" placeholder="*domain.com" required />
+          <label class="search-option">
+            <input id="force-recheck" type="checkbox" />
+            Force fresh RDAP checks (ignore local cache for this run)
+          </label>
+          <button id="search-toggle" type="submit">Start Search</button>
+        </form>
+      </section>
+
+      <section class="panel editor-panel">
+        <div class="editor-header">
+          <h2>Wordlists</h2>
+          <div class="wordlist-top-controls">
+            <input id="wordlist-upload" name="wordlist-upload" type="file" accept=".txt,.lst,.csv" multiple data-editor-control="true" />
+            <button id="merge-wordlists-btn" type="button" data-editor-control="true">Merge</button>
+            <button id="clear-wordlists-btn" type="button" data-editor-control="true">Clear</button>
+          </div>
+          <div class="editor-target-picker">
+            <label for="editor-target-select">Editing</label>
+            <select id="editor-target-select" data-editor-control="true"></select>
+          </div>
+          <div class="editor-header-actions">
+            <button id="editor-collapse-toggle" type="button">Collapse Editor</button>
+            <div class="editor-actions">
+              <button id="undo-btn" type="button" data-editor-control="true">Undo</button>
+              <button id="redo-btn" type="button" data-editor-control="true">Redo</button>
+              <button id="export-wordlist-btn" type="button" data-editor-control="true">Download Edited .txt</button>
+            </div>
+          </div>
+        </div>
+        <p class="max-note">Current max supported: 50,000 words per wordlist and 1,000,000 expanded candidates per run.</p>
+        <p id="upload-assignment" class="upload-summary">No uploaded lists yet. Upload files or edit the current list.</p>
+        <ul id="loaded-wordlists" class="loaded-wordlists"></ul>
+
+        <div id="editor-body" class="editor-body">
+          <div class="editor-tools">
+            <div class="tool-group">
+              <label for="min-length">Min length</label>
+              <input id="min-length" type="number" min="0" placeholder="none" data-editor-control="true" />
+            </div>
+            <div class="tool-group">
+              <label for="max-length">Max length</label>
+              <input id="max-length" type="number" min="0" placeholder="none" data-editor-control="true" />
+            </div>
+            <div class="tool-group wide">
+              <label for="include-substring">Include substring</label>
+              <input id="include-substring" type="text" placeholder="must contain" data-editor-control="true" />
+            </div>
+            <div class="tool-group wide">
+              <label for="exclude-substring">Exclude substring</label>
+              <input id="exclude-substring" type="text" placeholder="must not contain" data-editor-control="true" />
+            </div>
+            <div class="tool-group check-group">
+              <label>
+                <input id="allowed-char-only" type="checkbox" data-editor-control="true" />
+                Remove entries containing characters other than <code>a-z</code>, <code>0-9</code>, <code>-</code>
+              </label>
+            </div>
+            <div class="tool-group actions-group">
+              <button id="apply-cleanup-btn" type="button" data-editor-control="true">Apply Cleanup</button>
+              <button id="dedupe-btn" type="button" data-editor-control="true">Dedupe</button>
+              <select id="editor-sort-mode" data-editor-control="true">
+                <option value="az">Sort A-Z</option>
+                <option value="za">Sort Z-A</option>
+              </select>
+              <button id="sort-editor-btn" type="button" data-editor-control="true">Apply Sort</button>
+            </div>
+          </div>
+
+          <p id="perf-warning" class="perf-warning hidden">
+            This wordlist is over 50,000 words. Current max supported is 50,000 words per list. Reduce list size before scanning.
+          </p>
+
+          <label id="wordlist-editor-label" for="wordlist-editor">Editable Wordlist (one word per line)</label>
+          <textarea id="wordlist-editor" rows="12" spellcheck="false" data-editor-control="true" placeholder="example&#10;my&#10;test"></textarea>
+
+          <div class="editor-stats">
+            <div class="editor-stat"><span>Total Lines</span><strong id="wl-total">0</strong></div>
+            <div class="editor-stat"><span>Unique Words</span><strong id="wl-unique">0</strong></div>
+            <div class="editor-stat"><span>Filtered Out</span><strong id="wl-filtered">0</strong></div>
+            <div class="editor-stat"><span>Usable Count</span><strong id="wl-usable">0</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel status-panel">
+        <div class="stats-row">
+          <div class="stat">
+            <span class="label">Status</span>
+            <span id="status" class="value">Idle</span>
+          </div>
+          <div class="stat">
+            <span class="label">Progress</span>
+            <span id="progress-text" class="value">0 / 0</span>
+          </div>
+          <div class="stat">
+            <span class="label">Available</span>
+            <span id="available-count" class="value success">0</span>
+          </div>
+          <div class="stat">
+            <span class="label">Taken</span>
+            <span id="taken-count" class="value">0</span>
+          </div>
+          <div class="stat">
+            <span class="label">Unknown</span>
+            <span id="unknown-count" class="value warn">0</span>
+          </div>
+          <div class="stat">
+            <span class="label">Invalid</span>
+            <span id="invalid-count" class="value">0</span>
+          </div>
+          <div class="stat">
+            <span class="label">Cache Hits</span>
+            <span id="cache-hit-count" class="value success">0</span>
+          </div>
+          <div class="stat">
+            <span class="label">Cache Misses</span>
+            <span id="cache-miss-count" class="value">0</span>
+          </div>
+        </div>
+
+        <div class="progress-wrap" aria-label="Scan progress">
+          <div id="progress-bar" class="progress-bar"></div>
+        </div>
+
+        <p id="status-message" class="status-message">Upload or edit a wordlist, then start scanning.</p>
+      </section>
+
+      <section class="panel rate-panel">
+        <div class="rate-header">
+          <h3>RDAP Host Rate</h3>
+          <button id="rate-panel-toggle" type="button">Collapse</button>
+        </div>
+        <div id="rate-panel-body" class="rate-body">
+          <p class="rate-note">Adaptive per-host pacing. Known strict hosts use safer defaults.</p>
+          <p id="rate-empty" class="rate-empty">No host activity yet.</p>
+          <div class="rate-table-wrap">
+            <table class="rate-table">
+              <thead>
+                <tr>
+                  <th>Host</th>
+                  <th>Current Interval</th>
+                  <th>Policy</th>
+                  <th>Req</th>
+                  <th>429</th>
+                  <th>Last</th>
+                </tr>
+              </thead>
+              <tbody id="rate-status-body"></tbody>
+            </table>
+          </div>
+          <div class="rate-speed-block">
+            <div class="speed-header">
+              <h4>Manual Speed Controls</h4>
+              <button id="speed-reset-btn" type="button">Reset Defaults</button>
+            </div>
+            <p class="speed-note">
+              Increase interval seconds to slow requests if you are getting throttled/blocked. Applies immediately to active/new scans.
+            </p>
+            <label class="search-option">
+              <input id="speed-reset-backoff" type="checkbox" checked />
+              Reset current host backoff timers when applying changes
+            </label>
+            <div class="speed-grid">
+              <div class="speed-field">
+                <label for="speed-verisign">Verisign (.com/.net)</label>
+                <input id="speed-verisign" type="number" min="0.000001" step="0.000001" placeholder="auto" />
+              </div>
+              <div class="speed-field">
+                <label for="speed-pir">Public Interest Registry (.org)</label>
+                <input id="speed-pir" type="number" min="0.000001" step="0.000001" placeholder="auto" />
+              </div>
+              <div class="speed-field">
+                <label for="speed-identity">Identity Digital (.ai/.io/.info)</label>
+                <input id="speed-identity" type="number" min="0.000001" step="0.000001" placeholder="auto" />
+              </div>
+              <div class="speed-field">
+                <label for="speed-registryco">Registry.co (.co)</label>
+                <input id="speed-registryco" type="number" min="0.000001" step="0.000001" placeholder="auto" />
+              </div>
+            </div>
+            <p id="speed-status" class="upload-summary">Using automatic host defaults.</p>
+            <button id="speed-apply-btn" type="button">Apply Speed Overrides</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel results-panel">
+        <div class="results-header">
+          <h2>Available Domains</h2>
+          <span id="available-view-meta" class="results-meta">0 in current view</span>
+        </div>
+
+        <div class="results-controls">
+          <div class="results-filter-row">
+            <select id="sort-mode" aria-label="Sort available domains">
+              <option value="az">Alphabetical A-Z</option>
+              <option value="za">Alphabetical Z-A</option>
+              <option value="len_asc">Length: Shortest first</option>
+              <option value="len_desc">Length: Longest first</option>
+              <option value="recent">Most recently added</option>
+              <option value="earliest">Earliest added</option>
+            </select>
+            <input id="filter" type="text" placeholder="Filter available domains" />
+          </div>
+          <div class="results-action-row">
+            <button id="copy-btn" type="button">Copy</button>
+            <div id="export-menu" class="export-menu">
+              <button id="export-menu-toggle" type="button" aria-haspopup="true" aria-expanded="false">Export</button>
+              <div id="export-menu-list" class="export-menu-list hidden" role="menu" aria-label="Export file type">
+                <button id="download-txt" type="button" role="menuitem">TXT</button>
+                <button id="download-csv" type="button" role="menuitem">CSV</button>
+                <button id="download-json" type="button" role="menuitem">JSON</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <ul id="available-list" class="available-list"></ul>
+      </section>
+
+      <section class="panel diagnostics-panel">
+        <h3>Recent Unknown/Error Results</h3>
+        <ul id="unknown-list" class="unknown-list"></ul>
+      </section>
+    </main>
+
+    <script src="/static/wordlist-utils.js?v=2026-03-23-1"></script>
+    <script src="/static/app.js?v=2026-03-23-1"></script>
+  </body>
+</html>

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/domain-search/batch-summary.schema.json",
+  "title": "Domain Search Batch Summary",
+  "type": "object",
+  "required": [
+    "started_at",
+    "finished_at",
+    "output_dir",
+    "formats",
+    "force_recheck",
+    "concurrency",
+    "fail_fast",
+    "summary_path",
+    "patterns"
+  ],
+  "properties": {
+    "started_at": { "type": "string" },
+    "finished_at": { "type": "string" },
+    "output_dir": { "type": "string" },
+    "formats": {
+      "type": "array",
+      "items": { "enum": ["txt", "csv", "json"] }
+    },
+    "force_recheck": { "type": "boolean" },
+    "concurrency": { "type": "integer", "minimum": 1 },
+    "fail_fast": { "type": "boolean" },
+    "summary_path": { "type": "string" },
+    "patterns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "status", "output_files", "counts"],
+        "properties": {
+          "pattern": { "type": "string" },
+          "normalized_pattern": { "type": ["string", "null"] },
+          "status": { "enum": ["completed", "failed", "cancelled"] },
+          "output_files": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": { "type": "integer" }
+          },
+          "error": { "type": ["string", "null"] },
+          "job_id": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

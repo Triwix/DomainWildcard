@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "domain-search"
+version = "0.1.0"
+description = "RDAP-safe wildcard domain availability scanner with web UI and terminal tools."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi==0.115.12",
+  "httpx==0.28.1",
+  "python-multipart==0.0.20",
+  "uvicorn==0.34.0",
+]
+
+[project.scripts]
+domain-search = "app.launcher:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["static/*"]

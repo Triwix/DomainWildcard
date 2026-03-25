@@ -1,0 +1,2 @@
+recursive-include app/static *
+include README.md
