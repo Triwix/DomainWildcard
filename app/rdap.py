@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import email.utils
 import os
 import random
@@ -19,6 +20,11 @@ from app.result_cache import DomainResultCache
 
 _ASCII_LABEL_RE = re.compile(r"^[a-z0-9-]{1,63}$")
 _IPV4_FALLBACK_HOST_CONTAINS = ("rdap.identitydigital.services",)
+_IDENTITYDIGITAL_WHOIS_HOST = "whois.nic.ai"
+_IDENTITYDIGITAL_WHOIS_PORT = 43
+_IDENTITYDIGITAL_WHOIS_TIMEOUT_SECONDS = 12.0
+_IDENTITYDIGITAL_WHOIS_REFUSED_PENALTY_SECONDS = 24.0
+_IDENTITYDIGITAL_WHOIS_NETWORK_PENALTY_SECONDS = 8.0
 
 
 class DomainValidationError(ValueError):
@@ -56,6 +62,8 @@ PUBLICINTERESTREGISTRY_MIN_INTERVAL_ENV = "RDAP_PUBLICINTERESTREGISTRY_MIN_INTER
 DEFAULT_PUBLICINTERESTREGISTRY_MIN_INTERVAL_SECONDS = 0.02
 IDENTITYDIGITAL_MIN_INTERVAL_ENV = "RDAP_IDENTITYDIGITAL_MIN_INTERVAL_SECONDS"
 DEFAULT_IDENTITYDIGITAL_MIN_INTERVAL_SECONDS = 0.85
+IDENTITYDIGITAL_WHOIS_MIN_INTERVAL_ENV = "RDAP_IDENTITYDIGITAL_WHOIS_MIN_INTERVAL_SECONDS"
+DEFAULT_IDENTITYDIGITAL_WHOIS_MIN_INTERVAL_SECONDS = 0.2
 REGISTRY_CO_MIN_INTERVAL_ENV = "RDAP_REGISTRY_CO_MIN_INTERVAL_SECONDS"
 DEFAULT_REGISTRY_CO_MIN_INTERVAL_SECONDS = 0.0125
 CENTRALNIC_MIN_INTERVAL_ENV = "RDAP_CENTRALNIC_MIN_INTERVAL_SECONDS"
@@ -97,6 +105,7 @@ def build_default_known_policies(
     verisign_min_interval_seconds: Optional[float] = None,
     publicinterestregistry_min_interval_seconds: Optional[float] = None,
     identitydigital_min_interval_seconds: Optional[float] = None,
+    identitydigital_whois_min_interval_seconds: Optional[float] = None,
     registry_co_min_interval_seconds: Optional[float] = None,
     centralnic_min_interval_seconds: Optional[float] = None,
     gmoregistry_min_interval_seconds: Optional[float] = None,
@@ -127,6 +136,14 @@ def build_default_known_policies(
         )
         if identitydigital_min_interval_seconds is None
         else max(0.000001, float(identitydigital_min_interval_seconds))
+    )
+    identitydigital_whois_floor = (
+        _parse_positive_float_env(
+            IDENTITYDIGITAL_WHOIS_MIN_INTERVAL_ENV,
+            DEFAULT_IDENTITYDIGITAL_WHOIS_MIN_INTERVAL_SECONDS,
+        )
+        if identitydigital_whois_min_interval_seconds is None
+        else max(0.000001, float(identitydigital_whois_min_interval_seconds))
     )
     registry_co_floor = (
         _parse_positive_float_env(
@@ -212,6 +229,11 @@ def build_default_known_policies(
             "rdap.identitydigital.services",
             identitydigital_floor,
             f"Identity Digital calibrated floor: {identitydigital_floor:.6f}s",
+        ),
+        HostRatePolicy(
+            "whois.nic.ai",
+            identitydigital_whois_floor,
+            f"Identity Digital WHOIS fallback floor: {identitydigital_whois_floor:.6f}s",
         ),
         HostRatePolicy(
             "rdap.registry.co",
@@ -629,6 +651,21 @@ def parse_retry_after(value: Optional[str], now: Optional[datetime] = None) -> O
     return max(0.0, delta)
 
 
+def parse_identitydigital_whois_state(payload: str) -> Optional[str]:
+    text = str(payload or "").lower()
+    if not text:
+        return None
+    if "domain not found." in text:
+        return "available"
+    if "currently available for application via the identity digital dropzone service" in text:
+        return "available"
+    if "domain name:" in text:
+        return "taken"
+    if "this name is reserved by the registry" in text:
+        return "taken"
+    return None
+
+
 class RDAPClient:
     def __init__(
         self,
@@ -644,6 +681,10 @@ class RDAPClient:
         available_ttl_seconds: int = 15 * 60,
         taken_ttl_seconds: int = 6 * 60 * 60,
         unknown_ttl_seconds: int = 5 * 60,
+        enable_identitydigital_whois_fallback: bool = True,
+        identitydigital_whois_host: str = _IDENTITYDIGITAL_WHOIS_HOST,
+        identitydigital_whois_port: int = _IDENTITYDIGITAL_WHOIS_PORT,
+        identitydigital_whois_timeout_seconds: float = _IDENTITYDIGITAL_WHOIS_TIMEOUT_SECONDS,
     ):
         self.http_client = http_client
         self.ipv4_http_client = ipv4_http_client
@@ -657,6 +698,10 @@ class RDAPClient:
         self.available_ttl_seconds = max(60, int(available_ttl_seconds))
         self.taken_ttl_seconds = max(60, int(taken_ttl_seconds))
         self.unknown_ttl_seconds = max(30, int(unknown_ttl_seconds))
+        self.enable_identitydigital_whois_fallback = bool(enable_identitydigital_whois_fallback)
+        self.identitydigital_whois_host = str(identitydigital_whois_host or _IDENTITYDIGITAL_WHOIS_HOST).strip().lower()
+        self.identitydigital_whois_port = int(identitydigital_whois_port)
+        self.identitydigital_whois_timeout_seconds = max(1.0, float(identitydigital_whois_timeout_seconds))
         # Some RDAP hosts intermittently throttle HEAD while serving GET normally.
         # Prefer direct GET checks for stable high-volume scans.
         self._prefer_head_exists_probe = False
@@ -766,6 +811,93 @@ class RDAPClient:
             headers=headers,
         )
 
+    def _can_use_identitydigital_whois_fallback(self, domain: str, rdap_host: str) -> bool:
+        if not self.enable_identitydigital_whois_fallback:
+            return False
+        lowered_domain = str(domain or "").strip().lower().rstrip(".")
+        if not lowered_domain.endswith(".ai"):
+            return False
+        return self._supports_ipv4_fallback(rdap_host)
+
+    async def _query_identitydigital_whois(self, domain: str) -> str:
+        reader = None
+        writer = None
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.identitydigital_whois_host, self.identitydigital_whois_port),
+                timeout=self.identitydigital_whois_timeout_seconds,
+            )
+            writer.write(f"{domain}\r\n".encode("utf-8", errors="ignore"))
+            await asyncio.wait_for(writer.drain(), timeout=self.identitydigital_whois_timeout_seconds)
+
+            chunks: List[bytes] = []
+            while True:
+                chunk = await asyncio.wait_for(
+                    reader.read(4096),
+                    timeout=self.identitydigital_whois_timeout_seconds,
+                )
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks).decode("utf-8", errors="ignore")
+        finally:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+
+    async def _check_domain_via_identitydigital_whois(self, domain: str) -> Optional[DomainResult]:
+        whois_host = self.identitydigital_whois_host
+        await self.limiter.acquire(whois_host)
+        try:
+            payload = await self._query_identitydigital_whois(domain)
+        except (asyncio.TimeoutError, TimeoutError):
+            wait_seconds = max(_IDENTITYDIGITAL_WHOIS_NETWORK_PENALTY_SECONDS, self._compute_backoff(1))
+            await self.limiter.record_network_error(
+                whois_host,
+                wait_seconds,
+                "Identity Digital WHOIS timeout",
+            )
+            return None
+        except ConnectionRefusedError:
+            wait_seconds = max(_IDENTITYDIGITAL_WHOIS_REFUSED_PENALTY_SECONDS, self._compute_backoff(1))
+            await self.limiter.record_forbidden(whois_host, wait_seconds, status_code=403)
+            return None
+        except OSError as exc:
+            lowered = str(exc).lower()
+            if "refused" in lowered:
+                wait_seconds = max(_IDENTITYDIGITAL_WHOIS_REFUSED_PENALTY_SECONDS, self._compute_backoff(1))
+                await self.limiter.record_forbidden(whois_host, wait_seconds, status_code=403)
+            else:
+                wait_seconds = max(_IDENTITYDIGITAL_WHOIS_NETWORK_PENALTY_SECONDS, self._compute_backoff(1))
+                await self.limiter.record_network_error(
+                    whois_host,
+                    wait_seconds,
+                    f"Identity Digital WHOIS error: {exc}",
+                )
+            return None
+
+        state = parse_identitydigital_whois_state(payload)
+        if state is None:
+            wait_seconds = max(_IDENTITYDIGITAL_WHOIS_NETWORK_PENALTY_SECONDS, self._compute_backoff(1))
+            await self.limiter.record_network_error(
+                whois_host,
+                wait_seconds,
+                "Identity Digital WHOIS returned unclassified payload",
+            )
+            return None
+
+        await self.limiter.record_success(whois_host, 200)
+        return await self._cache_result(
+            DomainResult(
+                domain=domain,
+                state=state,
+                rdap_host=whois_host,
+                http_status=200,
+                source=f"whois:{whois_host}",
+            )
+        )
+
     def _ttl_for_state(self, state: str) -> int:
         if state == "available":
             return self.available_ttl_seconds
@@ -843,6 +975,10 @@ class RDAPClient:
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 wait_seconds = self._compute_backoff(attempt)
                 await self.limiter.record_network_error(host, wait_seconds, str(exc))
+                if self._can_use_identitydigital_whois_fallback(domain, host):
+                    fallback_result = await self._check_domain_via_identitydigital_whois(domain)
+                    if fallback_result is not None:
+                        return fallback_result
                 if attempt == self.max_retries:
                     return await self._cache_result(
                         DomainResult(
@@ -899,6 +1035,11 @@ class RDAPClient:
                 else:
                     wait_seconds = self._compute_backoff(attempt)
                     await self.limiter.record_server_error(host, wait_seconds, status)
+
+                if self._can_use_identitydigital_whois_fallback(domain, host):
+                    fallback_result = await self._check_domain_via_identitydigital_whois(domain)
+                    if fallback_result is not None:
+                        return fallback_result
 
                 if attempt == self.max_retries:
                     return await self._cache_result(

@@ -31,6 +31,8 @@ def test_cli_parser_supports_repeated_pattern_args():
             "/tmp/custom-cache.sqlite3",
             "--identitydigital-min-interval",
             "1.25",
+            "--identitydigital-whois-min-interval",
+            "0.3",
         ]
     )
     assert args.pattern == ["*.com", "*go.com"]
@@ -40,6 +42,7 @@ def test_cli_parser_supports_repeated_pattern_args():
     assert args.export_wildcard_token == "star"
     assert args.cache_db == "/tmp/custom-cache.sqlite3"
     assert args.identitydigital_min_interval == 1.25
+    assert args.identitydigital_whois_min_interval == 0.3
     assert args.fail_fast is False
 
 

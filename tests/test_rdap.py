@@ -13,6 +13,7 @@ from app.rdap import (
     DEFAULT_VERISIGN_MIN_INTERVAL_SECONDS,
     DEFAULT_PUBLICINTERESTREGISTRY_MIN_INTERVAL_SECONDS,
     DEFAULT_IDENTITYDIGITAL_MIN_INTERVAL_SECONDS,
+    DEFAULT_IDENTITYDIGITAL_WHOIS_MIN_INTERVAL_SECONDS,
     DEFAULT_NOMINET_MIN_INTERVAL_SECONDS,
     DEFAULT_RADIX_MIN_INTERVAL_SECONDS,
     DEFAULT_REGISTRO_BR_MIN_INTERVAL_SECONDS,
@@ -23,6 +24,7 @@ from app.rdap import (
     RDAPClient,
     build_default_known_policies,
     normalize_domain,
+    parse_identitydigital_whois_state,
     parse_retry_after,
 )
 from app.result_cache import DomainResultCache
@@ -88,6 +90,16 @@ def test_parse_retry_after_numeric_and_http_date():
     assert parsed == pytest.approx(25.0, abs=1.0)
 
 
+def test_parse_identitydigital_whois_state_covers_reserved_and_dropzone_available():
+    assert parse_identitydigital_whois_state("This name is reserved by the Registry.") == "taken"
+    assert (
+        parse_identitydigital_whois_state(
+            "This domain is currently available for application via the Identity Digital Dropzone service."
+        )
+        == "available"
+    )
+
+
 @pytest.mark.parametrize(
     ("host", "default_value", "override_kwargs", "override_value"),
     [
@@ -114,6 +126,12 @@ def test_parse_retry_after_numeric_and_http_date():
             DEFAULT_REGISTRY_CO_MIN_INTERVAL_SECONDS,
             {"registry_co_min_interval_seconds": 0.03},
             0.03,
+        ),
+        (
+            "whois.nic.ai",
+            DEFAULT_IDENTITYDIGITAL_WHOIS_MIN_INTERVAL_SECONDS,
+            {"identitydigital_whois_min_interval_seconds": 0.15},
+            0.15,
         ),
         (
             "rdap.centralnic.com",
@@ -454,6 +472,75 @@ def test_rdap_client_uses_ipv4_fallback_for_identity_digital_403():
     assert result.http_status == 404
     assert primary_methods == ["HEAD"]
     assert ipv4_methods == ["HEAD"]
+
+
+def test_rdap_client_falls_back_to_identitydigital_whois_on_rdap_403_reserved():
+    call_count = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        call_count["count"] += 1
+        return httpx.Response(403)
+
+    async def run():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            checker = RDAPClient(
+                http_client=client,
+                resolver=StaticResolver("https://rdap.identitydigital.services/rdap"),
+                limiter=NoSleepLimiter(),
+                max_retries=1,
+                base_backoff_seconds=0,
+                jitter_seconds=0,
+            )
+
+            async def fake_query(_domain: str) -> str:
+                return "This name is reserved by the Registry."
+
+            checker._query_identitydigital_whois = fake_query  # type: ignore[method-assign]
+            return await checker.check_domain("iic.ai")
+
+    result = asyncio.run(run())
+    assert call_count["count"] == 1
+    assert result.state == "taken"
+    assert result.source == "whois:whois.nic.ai"
+    assert result.rdap_host == "whois.nic.ai"
+    assert result.http_status == 200
+
+
+def test_rdap_client_falls_back_to_identitydigital_whois_on_rdap_403_dropzone_available():
+    call_count = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        call_count["count"] += 1
+        return httpx.Response(403)
+
+    async def run():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            checker = RDAPClient(
+                http_client=client,
+                resolver=StaticResolver("https://rdap.identitydigital.services/rdap"),
+                limiter=NoSleepLimiter(),
+                max_retries=1,
+                base_backoff_seconds=0,
+                jitter_seconds=0,
+            )
+
+            async def fake_query(_domain: str) -> str:
+                return (
+                    "This domain is currently available for application via the "
+                    "Identity Digital Dropzone service."
+                )
+
+            checker._query_identitydigital_whois = fake_query  # type: ignore[method-assign]
+            return await checker.check_domain("vzr.ai")
+
+    result = asyncio.run(run())
+    assert call_count["count"] == 1
+    assert result.state == "available"
+    assert result.source == "whois:whois.nic.ai"
+    assert result.rdap_host == "whois.nic.ai"
+    assert result.http_status == 200
 
 
 def test_rdap_client_does_not_use_ipv4_fallback_for_non_identitydigital_host():

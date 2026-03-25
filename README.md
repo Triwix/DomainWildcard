@@ -16,6 +16,7 @@ Local FastAPI app for RDAP-based wildcard domain availability scanning, with bot
 - `.cn` and `.ru` depend on IANA bootstrap availability in this build (no safe hardcoded fallback endpoint configured).
 - Uses direct RDAP `GET` existence checks by default (the `HEAD` probe path exists in code but is disabled in this build for stability).
 - For Identity Digital hosts (`.ai`, `.io`, `.info`), the client automatically retries over IPv4 when dual-stack paths return HTTP `403`.
+- For `.ai` domains, the client automatically falls back to `whois.nic.ai` when RDAP returns repeated `403`/`429`/`5xx` or transport errors, and classifies Identity Digital-specific responses (including registry-reserved and Dropzone-available names).
 - Adaptive per-host pacing with backoff on `403`/`429`/`5xx`.
 - `.com` (Verisign) uses an aggressive default floor of `0.0001s` (adaptive backoff still applies on `403`/`429`/`5xx`).
 - Persistent local RDAP cache (SQLite TTL by result state).
@@ -237,6 +238,7 @@ python scripts/domain_batch_run.py \
 - `--verisign-min-interval` manual min interval seconds for `rdap.verisign.com` (`.com/.net`).
 - `--pir-min-interval` manual min interval seconds for `rdap.publicinterestregistry.org` (`.org`).
 - `--identitydigital-min-interval` manual min interval seconds for `rdap.identitydigital.services` (`.ai/.io/.info`).
+- `--identitydigital-whois-min-interval` manual min interval seconds for `whois.nic.ai` (`.ai` WHOIS fallback).
 - `--registryco-min-interval` manual min interval seconds for `rdap.registry.co` (`.co`).
 - `--centralnic-min-interval` manual min interval seconds for `rdap.centralnic.com` (`.xyz`).
 - `--gmoregistry-min-interval` manual min interval seconds for `rdap.gmoregistry.net` (`.shop`).

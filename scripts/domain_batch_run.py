@@ -119,6 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Manual min interval seconds for rdap.identitydigital.services (.ai/.io/.info).",
     )
     parser.add_argument(
+        "--identitydigital-whois-min-interval",
+        type=float,
+        default=None,
+        help="Manual min interval seconds for whois.nic.ai (.ai WHOIS fallback).",
+    )
+    parser.add_argument(
         "--registryco-min-interval",
         type=float,
         default=None,
@@ -473,6 +479,7 @@ async def _run(args: argparse.Namespace, stop_state: Dict[str, bool]) -> int:
         ("--verisign-min-interval", args.verisign_min_interval),
         ("--pir-min-interval", args.pir_min_interval),
         ("--identitydigital-min-interval", args.identitydigital_min_interval),
+        ("--identitydigital-whois-min-interval", args.identitydigital_whois_min_interval),
         ("--registryco-min-interval", args.registryco_min_interval),
         ("--centralnic-min-interval", args.centralnic_min_interval),
         ("--gmoregistry-min-interval", args.gmoregistry_min_interval),
@@ -541,6 +548,7 @@ async def _run(args: argparse.Namespace, stop_state: Dict[str, bool]) -> int:
         verisign_min_interval_seconds=args.verisign_min_interval,
         publicinterestregistry_min_interval_seconds=args.pir_min_interval,
         identitydigital_min_interval_seconds=args.identitydigital_min_interval,
+        identitydigital_whois_min_interval_seconds=args.identitydigital_whois_min_interval,
         registry_co_min_interval_seconds=args.registryco_min_interval,
         centralnic_min_interval_seconds=args.centralnic_min_interval,
         gmoregistry_min_interval_seconds=args.gmoregistry_min_interval,
